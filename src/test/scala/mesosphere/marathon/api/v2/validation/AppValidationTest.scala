@@ -1,26 +1,144 @@
 package mesosphere.marathon
 package api.v2.validation
 
-import mesosphere.{ UnitTest, ValidationTestLike }
+import com.wix.accord.Validator
+import com.wix.accord.scalatest.ResultMatchers
+import mesosphere.marathon.api.v2.AppNormalization
 import mesosphere.marathon.raml._
+import mesosphere.{ UnitTest, ValidationTestLike }
 
 class AppValidationTest extends UnitTest with ValidationTestLike {
 
-  "network validation" when {
-    implicit val basicValidator = AppValidation.validateCanonicalAppAPI(Set.empty)
+  val config = AppNormalization.Configuration(None, "mesos-bridge-name")
+  val configWithDefaultNetworkName = AppNormalization.Configuration(Some("defaultNetworkName"), "mesos-bridge-name")
+  val basicValidator: Validator[App] = AppValidation.validateCanonicalAppAPI(Set.empty, () => config.defaultNetworkName)
+  val withSecretsValidator: Validator[App] = AppValidation.validateCanonicalAppAPI(Set("secrets"), () => config.defaultNetworkName)
+  val withDefaultNetworkNameValidator: Validator[App] = AppValidation.validateCanonicalAppAPI(Set.empty, () => configWithDefaultNetworkName.defaultNetworkName)
 
-    def networkedApp(portMappings: Seq[ContainerPortMapping], networks: Seq[Network]) = {
+  "File based secrets validation" when {
+    "file based secret is used when secret feature is not enabled" should {
+      "fail" in {
+        val app = App(id = "/app", cmd = Some("cmd"),
+          container = Option(raml.Container(`type` = EngineType.Mesos, volumes = Seq(AppSecretVolume("/path", "bar"))))
+        )
+        val validation = basicValidator(app)
+        validation.isFailure shouldBe true
+        // Here and below: stringifying validation is admittedly not the best way but it's a nested Set(GroupViolation...) and not easy to test.
+        validation.toString should include ("Feature secrets is not enabled. Enable with --enable_features secrets")
+      }
+    }
+
+    "file based secret is used when corresponding secret is missing" should {
+      "fail" in {
+        val app = App(id = "/app", cmd = Some("cmd"),
+          secrets = Map[String, SecretDef]("foo" -> SecretDef("/bar")),
+          container = Option(raml.Container(`type` = EngineType.Mesos, volumes = Seq(AppSecretVolume("/path", "baz"))))
+        )
+        val validation = withSecretsValidator(app)
+        validation.isFailure shouldBe true
+        validation.toString should include ("volume.secret must refer to an existing secret")
+      }
+    }
+
+    "a valid file based secret" should {
+      "succeed" in {
+        val app = App(id = "/app", cmd = Some("cmd"),
+          secrets = Map[String, SecretDef]("foo" -> SecretDef("/bar")),
+          container = Option(raml.Container(`type` = EngineType.Mesos, volumes = Seq(AppSecretVolume("/path", "foo"))))
+        )
+        withSecretsValidator(app) shouldBe (aSuccess)
+      }
+    }
+  }
+
+  "Docker image pull config validation" when {
+    "pull config when the Mesos containerizer is used and the corresponding secret is provided" should {
+      "be accepted" in {
+        val app = App(
+          id = "/foo",
+          cmd = Some("bar"),
+          container = Some(Container(
+            `type` = EngineType.Mesos,
+            docker = Some(DockerContainer(
+              image = "xyz", pullConfig = Some(DockerPullConfig("aSecret")))))),
+          secrets = Map("aSecret" -> SecretDef("/secret")))
+
+        withSecretsValidator(app) shouldBe (aSuccess)
+      }
+    }
+
+    "pull config when the Mesos containerizer is used and the corresponding secret is not provided" should {
+      "fail" in {
+        val app = App(
+          id = "/foo",
+          cmd = Some("bar"),
+          container = Some(Container(
+            `type` = EngineType.Mesos,
+            docker = Some(DockerContainer(
+              image = "xyz", pullConfig = Some(DockerPullConfig("aSecret")))))))
+
+        withSecretsValidator(app).normalize should failWith(
+          "/container/docker/pullConfig" ->
+            "pullConfig.secret must refer to an existing secret")
+      }
+    }
+
+    "pull config when the Docker containerizer is used and the corresponding secret is provided" should {
+      "fail" in {
+        val app = App(
+          id = "/foo",
+          cmd = Some("bar"),
+          container = Some(Container(
+            `type` = EngineType.Docker,
+            docker = Some(DockerContainer(
+              image = "xyz", pullConfig = Some(DockerPullConfig("aSecret")))))),
+          secrets = Map("aSecret" -> SecretDef("/secret")))
+
+        withSecretsValidator(app).normalize should failWith(
+          "/container/docker" ->
+            "pullConfig is not supported with Docker containerizer")
+      }
+    }
+
+    "pull config when secrets feature is disabled" should {
+      "fail" in {
+        val app = App(
+          id = "/foo",
+          cmd = Some("bar"),
+          container = Some(Container(
+            `type` = EngineType.Mesos,
+            docker = Some(DockerContainer(
+              image = "xyz", pullConfig = Some(DockerPullConfig("aSecret")))))))
+
+        basicValidator(app).normalize should failWith(
+          "/container/docker/pullConfig" ->
+            "must be empty",
+          "/container/docker/pullConfig" ->
+            "Feature secrets is not enabled. Enable with --enable_features secrets)",
+          "/container/docker/pullConfig" ->
+            "pullConfig.secret must refer to an existing secret")
+      }
+    }
+  }
+
+  "network validation" when {
+    def networkedApp(portMappings: Seq[ContainerPortMapping], networks: Seq[Network], docker: Boolean = false) = {
       App(
         id = "/foo",
         cmd = Some("bar"),
         networks = networks,
-        container = Some(Container(`type` = EngineType.Mesos, portMappings = Some(portMappings))))
+        container = Some(Container(
+          portMappings = Some(portMappings),
+          `type` = if (docker) EngineType.Docker else EngineType.Mesos,
+          docker = if (docker) Some(DockerContainer(image = "foo")) else None
+        )))
     }
 
-    def containerNetworkedApp(portMappings: Seq[ContainerPortMapping], networkCount: Int = 1) =
+    def containerNetworkedApp(portMappings: Seq[ContainerPortMapping], networkCount: Int = 1, docker: Boolean = false) =
       networkedApp(
         portMappings,
-        networks = 1.to(networkCount).map { i => Network(mode = NetworkMode.Container, name = Some(i.toString)) })
+        networks = 1.to(networkCount).map { i => Network(mode = NetworkMode.Container, name = Some(i.toString)) },
+        docker = docker)
 
     "multiple container networks are specified for an app" should {
 
@@ -31,17 +149,26 @@ class AppValidationTest extends UnitTest with ValidationTestLike {
         shouldViolate(badApp, "/container/portMappings(0)", AppValidationMessages.NetworkNameRequiredForMultipleContainerNetworks)
       }
 
+      "limit docker containers to a single network" in {
+        val app = containerNetworkedApp(
+          Seq(ContainerPortMapping()), networkCount = 2, true)
+        basicValidator(app).normalize should failWith(
+          "/" -> AppValidationMessages.DockerEngineLimitedToSingleContainerNetwork
+        )
+      }
+
       "allow portMappings that don't declare hostPort nor networkNames" in {
-        val badApp = containerNetworkedApp(
+        val app = containerNetworkedApp(
           Seq(ContainerPortMapping()), networkCount = 2)
-        shouldSucceed(badApp)
+        shouldSucceed(app)
       }
 
       "allow portMappings that both declare a hostPort and a networkNames" in {
-        shouldSucceed(containerNetworkedApp(Seq(
+        val app = containerNetworkedApp(Seq(
           ContainerPortMapping(
             hostPort = Option(0),
-            networkNames = List("1"))), networkCount = 2))
+            networkNames = List("1"))), networkCount = 2)
+        basicValidator(app) shouldBe (aSuccess)
       }
     }
 
@@ -55,6 +182,17 @@ class AppValidationTest extends UnitTest with ValidationTestLike {
                 hostPort = Some(80),
                 containerPort = 80,
                 networkNames = List("1")))))
+      }
+
+      "consider a container network without name to be invalid" in {
+        val result = basicValidator(
+          networkedApp(Seq.empty, networks = Seq(Network(mode = NetworkMode.Container)), false))
+        result.isFailure shouldBe true
+      }
+
+      "consider a container network without name but with a default name from config valid" in {
+        withDefaultNetworkNameValidator(
+          networkedApp(Seq.empty, networks = Seq(Network(mode = NetworkMode.Container)), false)) shouldBe (aSuccess)
       }
 
       "consider a portMapping with a hostPort and two valid networkNames as invalid" in {

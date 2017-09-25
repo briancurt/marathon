@@ -1,6 +1,7 @@
 package mesosphere.marathon
 package core
 
+import java.time.Clock
 import javax.inject.Named
 
 import akka.actor.ActorSystem
@@ -8,7 +9,7 @@ import akka.event.EventStream
 import com.google.inject.{ Inject, Provider }
 import mesosphere.marathon.core.async.ExecutionContexts
 import mesosphere.marathon.core.auth.AuthModule
-import mesosphere.marathon.core.base.{ ActorsModule, Clock, LifecycleState }
+import mesosphere.marathon.core.base.{ ActorsModule, JvmExitsCrashStrategy, LifecycleState }
 import mesosphere.marathon.core.deployment.DeploymentModule
 import mesosphere.marathon.core.election._
 import mesosphere.marathon.core.event.EventModule
@@ -27,7 +28,6 @@ import mesosphere.marathon.core.matcher.reconcile.OfferMatcherReconciliationModu
 import mesosphere.marathon.core.plugin.PluginModule
 import mesosphere.marathon.core.pod.PodModule
 import mesosphere.marathon.core.readiness.ReadinessModule
-import mesosphere.marathon.core.task.bus.TaskBusModule
 import mesosphere.marathon.core.task.jobs.TaskJobsModule
 import mesosphere.marathon.core.task.termination.TaskTerminationModule
 import mesosphere.marathon.core.task.tracker.InstanceTrackerModule
@@ -61,6 +61,7 @@ class CoreModuleImpl @Inject() (
   private[this] lazy val random = Random
   private[this] lazy val lifecycleState = LifecycleState.WatchingJVM
   override lazy val actorsModule = new ActorsModule(actorSystem)
+  private[this] lazy val crashStrategy = JvmExitsCrashStrategy
 
   override lazy val leadershipModule = LeadershipModule(actorsModule.actorRefFactory)
   override lazy val electionModule = new ElectionModule(
@@ -68,12 +69,12 @@ class CoreModuleImpl @Inject() (
     actorSystem,
     eventStream,
     hostPort,
-    lifecycleState
+    lifecycleState,
+    crashStrategy
   )
 
   // TASKS
 
-  override lazy val taskBusModule = new TaskBusModule()
   override lazy val taskTrackerModule =
     new InstanceTrackerModule(clock, marathonConf, leadershipModule,
       storageModule.instanceRepository, instanceUpdateSteps)(actorsModule.materializer)
@@ -147,8 +148,7 @@ class CoreModuleImpl @Inject() (
   )
 
   // PLUGINS
-
-  override lazy val pluginModule = new PluginModule(marathonConf)
+  override lazy val pluginModule = new PluginModule(marathonConf, crashStrategy)
 
   override lazy val authModule: AuthModule = new AuthModule(pluginModule.pluginManager)
 
@@ -157,7 +157,7 @@ class CoreModuleImpl @Inject() (
   private[this] lazy val flowActors = new FlowModule(leadershipModule)
 
   flowActors.refillOfferMatcherManagerLaunchTokens(
-    marathonConf, taskBusModule.taskStatusObservables, offerMatcherManagerModule.subOfferMatcherManager)
+    marathonConf, offerMatcherManagerModule.subOfferMatcherManager)
 
   /** Combine offersWanted state from multiple sources. */
   private[this] lazy val offersWanted =

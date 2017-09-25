@@ -7,8 +7,6 @@ import mesosphere.marathon.core.plugin.PluginManager
 import mesosphere.marathon.state._
 import org.apache.mesos.{ Protos => Mesos }
 
-import scala.concurrent.duration._
-
 class AppDefinitionValidationTest extends UnitTest with ValidationTestLike {
 
   "AppDefinition" when {
@@ -16,17 +14,6 @@ class AppDefinitionValidationTest extends UnitTest with ValidationTestLike {
       "be valid" in new Fixture {
         val app = AppDefinition(id = PathId("/test"), cmd = Some("sleep 1000"))
         shouldSucceed(app)
-      }
-    }
-
-    "created with an invalid unreachable strategy" should {
-      "be invalid" in new Fixture {
-        val app = AppDefinition(
-          id = PathId("/test"),
-          cmd = Some("sleep 1000"),
-          unreachableStrategy = UnreachableEnabled(0.seconds))
-
-        shouldViolate(app, "/unreachableStrategy/inactiveAfter", "got 0 seconds, expected 1 second or more")
       }
     }
 

@@ -5,7 +5,7 @@ import akka.actor.{ ActorContext, ActorRef, Cancellable, Props, Terminated }
 import akka.pattern.ask
 import akka.testkit.TestProbe
 import mesosphere.AkkaUnitTest
-import mesosphere.marathon.core.base.ConstantClock
+import mesosphere.marathon.test.SettableClock
 import mesosphere.marathon.core.flow.OfferReviver
 import mesosphere.marathon.core.instance.TestInstanceBuilder._
 import mesosphere.marathon.core.instance.update.InstanceChange
@@ -66,7 +66,7 @@ class TaskLauncherActorTest extends AkkaUnitTest {
   case class Fixture(
       offerMatcherManager: OfferMatcherManager = mock[OfferMatcherManager],
       launchQueueConfig: LaunchQueueConfig = new LaunchQueueConfig { verify() },
-      clock: ConstantClock = ConstantClock(),
+      clock: SettableClock = new SettableClock(),
       instanceOpFactory: InstanceOpFactory = mock[InstanceOpFactory],
       instanceTracker: InstanceTracker = mock[InstanceTracker],
       offerReviver: OfferReviver = mock[OfferReviver],
@@ -183,7 +183,7 @@ class TaskLauncherActorTest extends AkkaUnitTest {
       launcherRef ! RateLimiterActor.DelayUpdate(f.app, now)
 
       val promise = Promise[MatchedInstanceOps]
-      launcherRef ! ActorOfferMatcher.MatchOffer(now + 1.seconds, offer, promise)
+      launcherRef ! ActorOfferMatcher.MatchOffer(offer, promise)
       promise.future.futureValue
 
       val counts = (launcherRef ? TaskLauncherActor.GetCount).futureValue.asInstanceOf[QueuedInstanceInfo]
@@ -220,7 +220,7 @@ class TaskLauncherActorTest extends AkkaUnitTest {
       launcherRef ! RateLimiterActor.DelayUpdate(constraintApp, clock.now())
 
       val promise = Promise[MatchedInstanceOps]
-      launcherRef ! ActorOfferMatcher.MatchOffer(clock.now() + 1.seconds, offer, promise)
+      launcherRef ! ActorOfferMatcher.MatchOffer(offer, promise)
       promise.future.futureValue
 
       Mockito.verify(instanceTracker).instancesBySpecSync
@@ -238,7 +238,7 @@ class TaskLauncherActorTest extends AkkaUnitTest {
       launcherRef ! RateLimiterActor.DelayUpdate(f.app, clock.now())
 
       val promise = Promise[MatchedInstanceOps]
-      launcherRef ! ActorOfferMatcher.MatchOffer(clock.now() + 1.seconds, offer, promise)
+      launcherRef ! ActorOfferMatcher.MatchOffer(offer, promise)
       val matched: MatchedInstanceOps = promise.future.futureValue
 
       val testProbe = TestProbe()
@@ -264,7 +264,7 @@ class TaskLauncherActorTest extends AkkaUnitTest {
       launcherRef ! RateLimiterActor.DelayUpdate(f.app, clock.now())
 
       val promise = Promise[MatchedInstanceOps]
-      launcherRef ! ActorOfferMatcher.MatchOffer(clock.now() + 1.seconds, offer, promise)
+      launcherRef ! ActorOfferMatcher.MatchOffer(offer, promise)
       val matchedTasks = promise.future.futureValue
       matchedTasks.opsWithSource.foreach(_.reject("stuff"))
 
@@ -308,13 +308,13 @@ class TaskLauncherActorTest extends AkkaUnitTest {
       launcherRef ! RateLimiterActor.DelayUpdate(f.app, clock.now())
 
       val promise = Promise[MatchedInstanceOps]
-      launcherRef ! ActorOfferMatcher.MatchOffer(clock.now() + 1.seconds, offer, promise)
+      launcherRef ! ActorOfferMatcher.MatchOffer(offer, promise)
       promise.future.futureValue
 
       // just make sure that prior messages have been processed, will not launch further tasks
 
       val promise2 = Promise[MatchedInstanceOps]
-      launcherRef ! ActorOfferMatcher.MatchOffer(clock.now() + 1.seconds, offer, promise2)
+      launcherRef ! ActorOfferMatcher.MatchOffer(offer, promise2)
       promise2.future.futureValue
 
       assert(scheduleCalled)
@@ -334,7 +334,7 @@ class TaskLauncherActorTest extends AkkaUnitTest {
       launcherRef ! RateLimiterActor.DelayUpdate(f.app, clock.now())
 
       val promise = Promise[MatchedInstanceOps]
-      launcherRef ! ActorOfferMatcher.MatchOffer(clock.now() + 1.seconds, offer, promise)
+      launcherRef ! ActorOfferMatcher.MatchOffer(offer, promise)
       val matchedTasks: MatchedInstanceOps = promise.future.futureValue
       matchedTasks.opsWithSource.foreach(_.accept())
 

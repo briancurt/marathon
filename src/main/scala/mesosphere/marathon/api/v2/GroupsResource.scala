@@ -41,7 +41,7 @@ class GroupsResource @Inject() (
 
   /** convert app to canonical form */
   private implicit val appNormalization: Normalization[raml.App] = {
-    val appNormalizationConfig = AppNormalization.Configure(
+    val appNormalizationConfig = AppNormalization.Configuration(
       config.defaultNetworkName.get,
       config.mesosBridgeName())
     AppsResource.appNormalization(AppsResource.NormalizationConfig(config.availableFeatures, appNormalizationConfig))
@@ -242,10 +242,8 @@ class GroupsResource @Inject() (
           raw
         ))(groupValidator)
 
-      val newVersion = Timestamp.now()
-
       if (dryRun) {
-
+        val newVersion = Timestamp.now()
         val originalGroup = groupManager.rootGroup()
         val updatedGroup = applyGroupUpdate(originalGroup, effectivePath, groupUpdate, newVersion)
 
@@ -310,6 +308,9 @@ class GroupsResource @Inject() (
     newVersion: Timestamp)(implicit identity: Identity): RootGroup = {
     val group = rootGroup.group(groupId).getOrElse(Group.empty(groupId))
 
+    /**
+      * roll back to a previous group version
+      */
     def versionChange: Option[RootGroup] = groupUpdate.version.map { version =>
       val targetVersion = Timestamp(version)
       checkAuthorization(UpdateGroup, group)
@@ -347,7 +348,8 @@ class GroupsResource @Inject() (
     val version = Timestamp.now()
 
     val effectivePath = update.id.map(PathId(_).canonicalPath(id)).getOrElse(id)
-    val deployment = result(groupManager.updateRoot(id.parent, applyGroupUpdate(_, effectivePath, update, version), version, force))
+    val deployment = result(groupManager.updateRoot(
+      id.parent, applyGroupUpdate(_, effectivePath, update, version), version, force))
     (deployment, effectivePath)
   }
 

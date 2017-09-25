@@ -3,7 +3,7 @@ package core.group
 
 import java.time.OffsetDateTime
 
-import akka.NotUsed
+import akka.{ Done, NotUsed }
 import akka.stream.scaladsl.Source
 import mesosphere.marathon.core.instance.Instance
 import mesosphere.marathon.core.pod.PodDefinition
@@ -108,7 +108,7 @@ trait GroupManager {
   def updateRoot(
     id: PathId,
     fn: RootGroup => RootGroup,
-    version: Timestamp = Timestamp.now(),
+    version: Timestamp = Group.defaultVersion,
     force: Boolean = false,
     toKill: Map[PathId, Seq[Instance]] = Map.empty): Future[DeploymentPlan]
 
@@ -126,7 +126,7 @@ trait GroupManager {
   def updateApp(
     appId: PathId,
     fn: Option[AppDefinition] => AppDefinition,
-    version: Timestamp = Timestamp.now(),
+    version: Timestamp = Group.defaultVersion,
     force: Boolean = false,
     toKill: Seq[Instance] = Seq.empty): Future[DeploymentPlan] =
     updateRoot(appId.parent, _.updateApp(appId, fn, version), version, force, Map(appId -> toKill))
@@ -145,9 +145,17 @@ trait GroupManager {
   def updatePod(
     podId: PathId,
     fn: Option[PodDefinition] => PodDefinition,
-    version: Timestamp = Timestamp.now(),
+    version: Timestamp = Group.defaultVersion,
     force: Boolean = false,
     toKill: Seq[Instance] = Seq.empty
-  ): Future[DeploymentPlan] = updateRoot(podId.parent, _.updatePod(podId, fn, version), version, force, Map(podId -> toKill))
+  ): Future[DeploymentPlan] = updateRoot(
+    podId.parent, _.updatePod(podId, fn, version), version, force, Map(podId -> toKill))
 
+  /**
+    * Refresh the internal root group cache. When calling this function, the internal hold cached root group will be dropped
+    * and loaded when accessing the next time.
+    *
+    * @return Done if refresh was successful
+    */
+  def invalidateGroupCache(): Future[Done]
 }

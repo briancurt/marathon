@@ -29,6 +29,8 @@ import scala.util.{ Failure, Success }
 
 case class ZkId(category: String, id: String, version: Option[OffsetDateTime]) {
   private val bucket = math.abs(id.hashCode % ZkId.HashBucketSize)
+
+  // BUG: id = "" for the root group this results in "Path must not end with / character" in curator
   def path: String = version.fold(f"/$category/$bucket%x/$id") { v =>
     f"/$category/$bucket%x/$id/${ZkId.DateFormat.format(v)}"
   }
@@ -209,7 +211,8 @@ class ZkPersistenceStore(
         await(client.setData(id.path, v.bytes).asTry) match {
           case Success(_) =>
             Done
-          case Failure(_: NoNodeException) =>
+          case Failure(e: NoNodeException) =>
+            logger.debug(s"Node for $id not found. Creating node now", e)
             await(limitRequests(client.create(
               id.path,
               creatingParentContainersIfNeeded = true, data = Some(v.bytes))).asTry) match {
@@ -227,8 +230,10 @@ class ZkPersistenceStore(
             }
 
           case Failure(e: KeeperException) =>
+            logger.warn(s"Could not store under $id", e)
             throw new StoreCommandFailedException(s"Unable to store $id", e)
           case Failure(e) =>
+            logger.warn(s"Could not store under $id", e)
             throw e
         }
       }
@@ -238,7 +243,7 @@ class ZkPersistenceStore(
   @SuppressWarnings(Array("all")) // async/await
   override protected def rawDeleteAll(id: ZkId): Future[Done] = {
     val unversionedId = id.copy(version = None)
-    retry(s"ZkPersistenceStore::delete($unversionedId)") {
+    retry(s"ZkPersistenceStore::deleteAll($unversionedId)") {
       client.delete(unversionedId.path, guaranteed = true, deletingChildrenIfNeeded = true).map(_ => Done).recover {
         case _: NoNodeException =>
           Done
@@ -264,7 +269,11 @@ class ZkPersistenceStore(
     val versions: Source[ZkId, NotUsed] = ids.flatMapConcat(id => rawVersions(id).map(v => id.copy(version = Some(v))))
     val combined = Source.combine(ids, versions)(Merge(_))
     combined.mapAsync(maxConcurrent) { id =>
-      rawGet(id).filter(_.isDefined).map(ser => BackupItem(id.category, id.id, id.version, ser.get.bytes))
+      rawGet(id).map { maybeSerialized =>
+        maybeSerialized.map(serialized => BackupItem(id.category, id.id, id.version, serialized.bytes))
+      }
+    }.collect {
+      case Some(backupItem) => backupItem
     }.concat {
       Source.fromFuture(storageVersion()).map { storedVersion =>
         val version = storedVersion.getOrElse(StorageVersions.current)

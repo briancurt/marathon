@@ -1,6 +1,8 @@
 package mesosphere.marathon
 package test
 
+import java.time.Clock
+
 import akka.stream.Materializer
 import com.github.fge.jackson.JsonLoader
 import com.github.fge.jsonschema.core.report.ProcessingReport
@@ -9,7 +11,6 @@ import mesosphere.marathon.Protos.Constraint
 import mesosphere.marathon.Protos.Constraint.Operator
 import mesosphere.marathon.api.JsonTestHelper
 import mesosphere.marathon.core.async.ExecutionContexts
-import mesosphere.marathon.core.base.Clock
 import mesosphere.marathon.core.condition.Condition
 import mesosphere.marathon.core.instance.Instance
 import mesosphere.marathon.core.instance.Instance.InstanceState
@@ -39,7 +40,7 @@ import scala.util.Random
 
 object MarathonTestHelper {
 
-  lazy val clock = Clock()
+  lazy val clock = Clock.systemUTC()
 
   def makeConfig(args: String*): AllConf = {
     new AllConf(args.toIndexedSeq) {
@@ -50,7 +51,7 @@ object MarathonTestHelper {
   }
 
   def defaultConfig(
-    maxTasksPerOffer: Int = 1,
+    maxInstancesPerOffer: Int = 1,
     minReviveOffersInterval: Long = 100,
     mesosRole: Option[String] = None,
     acceptedResourceRoles: Option[Set[String]] = None,
@@ -60,7 +61,7 @@ object MarathonTestHelper {
 
     var args = Seq(
       "--master", "127.0.0.1:5050",
-      "--max_tasks_per_offer", maxTasksPerOffer.toString,
+      "--max_instances_per_offer", maxInstancesPerOffer.toString,
       "--min_revive_offers_interval", minReviveOffersInterval.toString,
       "--mesos_authentication_principal", "marathon"
     )
@@ -382,13 +383,22 @@ object MarathonTestHelper {
     MarathonTestHelper.makeBasicOffer(
       reservation = Some(TaskLabels.labelsForTask(frameworkId, taskId)),
       role = "test"
-    ).addAllResources(persistentVolumeResources(taskId, localVolumeIds: _*)).build()
+    ).addAllResources(persistentVolumeResources(taskId, localVolumeIds: _*).asJava).build()
+  }
+
+  def offerWithVolumes(taskId: Task.Id, hostname: String, agentId: String, localVolumeIds: Task.LocalVolumeId*) = {
+    MarathonTestHelper.makeBasicOffer(
+      reservation = Some(TaskLabels.labelsForTask(frameworkId, taskId)),
+      role = "test"
+    ).setHostname(hostname)
+      .setSlaveId(Mesos.SlaveID.newBuilder().setValue(agentId).build())
+      .addAllResources(persistentVolumeResources(taskId, localVolumeIds: _*).asJava).build()
   }
 
   def offerWithVolumesOnly(taskId: Task.Id, localVolumeIds: Task.LocalVolumeId*) = {
     MarathonTestHelper.makeBasicOffer()
       .clearResources()
-      .addAllResources(persistentVolumeResources(taskId, localVolumeIds: _*))
+      .addAllResources(persistentVolumeResources(taskId, localVolumeIds: _*).asJava)
       .build()
   }
 
@@ -462,7 +472,7 @@ object MarathonTestHelper {
 
       def withNetworkInfo(hostName: Option[String] = None, hostPorts: Seq[Int] = Nil, networkInfos: scala.collection.Seq[NetworkInfo] = Nil): Task = {
         def containerStatus(networkInfos: scala.collection.Seq[NetworkInfo]) = {
-          Mesos.ContainerStatus.newBuilder().addAllNetworkInfos(networkInfos)
+          Mesos.ContainerStatus.newBuilder().addAllNetworkInfos(networkInfos.asJava)
         }
         def mesosStatus(taskId: Task.Id, mesosStatus: Option[TaskStatus], networkInfos: scala.collection.Seq[NetworkInfo]): Option[TaskStatus] = {
           val taskState = mesosStatus.fold(TaskState.TASK_STAGING)(_.getState)

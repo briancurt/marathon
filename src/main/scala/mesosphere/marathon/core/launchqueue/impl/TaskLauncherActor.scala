@@ -1,10 +1,12 @@
 package mesosphere.marathon
 package core.launchqueue.impl
 
+import java.time.Clock
+
 import akka.Done
 import akka.actor._
 import akka.event.LoggingReceive
-import mesosphere.marathon.core.base.Clock
+import com.typesafe.scalalogging.StrictLogging
 import mesosphere.marathon.core.flow.OfferReviver
 import mesosphere.marathon.core.instance.Instance
 import mesosphere.marathon.core.instance.update.{ InstanceChange, InstanceDeleted, InstanceUpdated }
@@ -85,7 +87,7 @@ private class TaskLauncherActor(
     offerMatchStatisticsActor: ActorRef,
 
     private[this] var runSpec: RunSpec,
-    private[this] var instancesToLaunch: Int) extends Actor with ActorLogging with Stash {
+    private[this] var instancesToLaunch: Int) extends Actor with StrictLogging with Stash {
   // scalastyle:on parameter.number
 
   private[this] var inFlightInstanceOperations = Map.empty[Instance.Id, Cancellable]
@@ -104,9 +106,7 @@ private class TaskLauncherActor(
   override def preStart(): Unit = {
     super.preStart()
 
-    log.info(
-      "Started instanceLaunchActor for {} version {} with initial count {}",
-      runSpec.id, runSpec.version, instancesToLaunch)
+    logger.info(s"Started instanceLaunchActor for ${runSpec.id} version ${runSpec.version} with initial count $instancesToLaunch")
 
     instanceMap = instanceTracker.instancesBySpecSync.instancesMap(runSpec.id).instanceMap
     rateLimiterActor ! RateLimiterActor.GetDelay(runSpec)
@@ -117,7 +117,7 @@ private class TaskLauncherActor(
     recheckBackOff.foreach(_.cancel())
 
     if (inFlightInstanceOperations.nonEmpty) {
-      log.warning("Actor shutdown while instances are in flight: {}", inFlightInstanceOperations.keys.mkString(", "))
+      logger.warn(s"Actor shutdown while instances are in flight: ${inFlightInstanceOperations.keys.mkString(", ")}")
       inFlightInstanceOperations.values.foreach(_.cancel())
     }
 
@@ -125,7 +125,7 @@ private class TaskLauncherActor(
 
     super.postStop()
 
-    log.info("Stopped InstanceLauncherActor for {} version {}", runSpec.id, runSpec.version)
+    logger.info(s"Stopped InstanceLauncherActor for ${runSpec.id} version ${runSpec.version}")
   }
 
   override def receive: Receive = waitForInitialDelay
@@ -136,7 +136,7 @@ private class TaskLauncherActor(
       unstashAll()
       context.become(active)
     case msg @ RateLimiterActor.DelayUpdate(spec, delayUntil) if spec != runSpec =>
-      log.warning("Received delay update for other runSpec: {}", msg)
+      logger.warn(s"Received delay update for other runSpec: $msg")
     case message: Any => stash()
   }
 
@@ -182,7 +182,7 @@ private class TaskLauncherActor(
       if (inFlightInstanceOperations.nonEmpty) {
         // try to stop gracefully but also schedule timeout
         import context.dispatcher
-        log.info("schedule timeout for stopping in " + config.taskOpNotificationTimeout().milliseconds)
+        logger.info(s"schedule timeout for stopping in ${config.taskOpNotificationTimeout().milliseconds}")
         context.system.scheduler.scheduleOnce(config.taskOpNotificationTimeout().milliseconds, self, PoisonPill)
       }
       waitForInFlightIfNecessary()
@@ -193,7 +193,7 @@ private class TaskLauncherActor(
       context.stop(self)
     } else {
       val taskIds = inFlightInstanceOperations.keys.take(3).mkString(", ")
-      log.info(
+      logger.info(
         s"Stopping but still waiting for ${inFlightInstanceOperations.size} in-flight messages, " +
           s"first three task ids: $taskIds"
       )
@@ -225,10 +225,10 @@ private class TaskLauncherActor(
         OfferMatcherRegistration.manageOfferMatcherStatus()
       }
 
-      log.debug("After delay update {}", status)
+      logger.debug(s"After delay update $status")
 
     case msg @ RateLimiterActor.DelayUpdate(spec, delayUntil) if spec != runSpec =>
-      log.warning("Received delay update for other runSpec: {}", msg)
+      logger.warn(s"Received delay update for other runSpec: $msg")
 
     case RecheckIfBackOffUntilReached => OfferMatcherRegistration.manageOfferMatcherStatus()
   }
@@ -236,9 +236,7 @@ private class TaskLauncherActor(
   private[this] def receiveTaskLaunchNotification: Receive = {
     case InstanceOpSourceDelegate.InstanceOpRejected(op, reason) if inFlight(op) =>
       removeInstance(op.instanceId)
-      log.debug(
-        "Task op '{}' for {} was REJECTED, reason '{}', rescheduling. {}",
-        op.getClass.getSimpleName, op.instanceId, reason, status)
+      logger.debug(s"Task op '${op.getClass.getSimpleName}' for ${op.instanceId} was REJECTED, reason '$reason', rescheduling. $status")
 
       op match {
         // only increment for launch ops, not for reservations:
@@ -254,25 +252,25 @@ private class TaskLauncherActor(
       // When we receive a launch confirmation or rejection, we cancel this timer but
       // there is still a race and we might send ourselves the message nevertheless, so we just
       // ignore it here.
-      log.debug("Ignoring task launch rejected for '{}' as the task is not in flight anymore", op.instanceId)
+      logger.debug(s"Ignoring task launch rejected for '${op.instanceId}' as the task is not in flight anymore")
 
     case InstanceOpSourceDelegate.InstanceOpRejected(op, reason) =>
-      log.warning("Unexpected task op '{}' rejected for {} with reason {}", op.getClass.getSimpleName, op.instanceId, reason)
+      logger.warn(s"Unexpected task op '${op.getClass.getSimpleName}' rejected for ${op.instanceId} with reason $reason")
 
     case InstanceOpSourceDelegate.InstanceOpAccepted(op) =>
       inFlightInstanceOperations -= op.instanceId
-      log.debug("Task op '{}' for {} was accepted. {}", op.getClass.getSimpleName, op.instanceId, status)
+      logger.debug(s"Task op '${op.getClass.getSimpleName}' for ${op.instanceId} was accepted. $status")
   }
 
   private[this] def receiveInstanceUpdate: Receive = {
     case change: InstanceChange =>
       change match {
         case update: InstanceUpdated =>
-          log.debug("receiveInstanceUpdate: {} is {}", update.id, update.condition)
+          logger.debug(s"receiveInstanceUpdate: ${update.id} is ${update.condition}")
           instanceMap += update.id -> update.instance
 
         case update: InstanceDeleted =>
-          log.info("receiveInstanceUpdate: {} was deleted ({})", update.id, update.condition)
+          logger.info(s"receiveInstanceUpdate: ${update.id} was deleted (${update.condition})")
           removeInstance(update.id)
           // A) If the app has constraints, we need to reconsider offers that
           // we already rejected. E.g. when a host:unique constraint prevented
@@ -306,21 +304,15 @@ private class TaskLauncherActor(
         instancesToLaunch = addCount
 
         if (configChange) {
-          log.info(
-            "getting new runSpec for '{}', version {} with {} initial instances",
-            runSpec.id, runSpec.version, addCount
-          )
+          logger.info(s"getting new runSpec for '${runSpec.id}', version ${runSpec.version} with $addCount initial instances")
 
           suspendMatchingUntilWeGetBackoffDelayUpdate()
 
         } else {
-          log.info(
-            "scaling change for '{}', version {} with {} initial instances",
-            runSpec.id, runSpec.version, addCount
-          )
+          logger.info(s"scaling change for '${runSpec.id}', version ${runSpec.version} with $addCount initial instances")
         }
       } else {
-        log.info("add {} instances to {} instances to launch", addCount, instancesToLaunch)
+        logger.info(s"add $addCount instances to $instancesToLaunch instances to launch")
         instancesToLaunch += addCount
       }
 
@@ -355,12 +347,11 @@ private class TaskLauncherActor(
   }
 
   private[this] def receiveProcessOffers: Receive = {
-    case ActorOfferMatcher.MatchOffer(deadline, offer, promise) if clock.now() >= deadline || !shouldLaunchInstances =>
-      val deadlineReached = clock.now() >= deadline
-      log.debug("ignoring offer, offer deadline {}reached. {}", if (deadlineReached) "" else "NOT ", status)
+    case ActorOfferMatcher.MatchOffer(offer, promise) if !shouldLaunchInstances =>
+      logger.debug(s"Ignoring offer ${offer.getId.getValue}: $status")
       promise.trySuccess(MatchedInstanceOps.noMatch(offer.getId))
 
-    case ActorOfferMatcher.MatchOffer(deadline, offer, promise) =>
+    case ActorOfferMatcher.MatchOffer(offer, promise) =>
       val reachableInstances = instanceMap.filterNotAs{ case (_, instance) => instance.state.condition.isLost }
       val matchRequest = InstanceOpFactory.Request(runSpec, offer, reachableInstances, instancesToLaunch)
       instanceOpFactory.matchOfferRequest(matchRequest) match {
@@ -419,10 +410,7 @@ private class TaskLauncherActor(
 
     updateActorState()
 
-    log.debug(
-      "Request {} for instance '{}', version '{}'. {}",
-      instanceOp.getClass.getSimpleName, instanceOp.instanceId.idString, runSpec.version, status)
-
+    logger.debug(s"Request ${instanceOp.getClass.getSimpleName} for instance '${instanceOp.instanceId.idString}', version '${runSpec.version}'. $status")
     promise.trySuccess(MatchedInstanceOps(offer.getId, Seq(InstanceOpWithSource(myselfAsLaunchSource, instanceOp))))
   }
 
@@ -474,14 +462,14 @@ private class TaskLauncherActor(
       val shouldBeRegistered = shouldLaunchInstances
 
       if (shouldBeRegistered && !registeredAsMatcher) {
-        log.debug("Registering for {}, {}.", runSpec.id, runSpec.version)
+        logger.debug(s"Registering for ${runSpec.id}, ${runSpec.version}.")
         offerMatcherManager.addSubscription(myselfAsOfferMatcher)(context.dispatcher)
         registeredAsMatcher = true
       } else if (!shouldBeRegistered && registeredAsMatcher) {
         if (instancesToLaunch > 0) {
-          log.info("Backing off due to task failures. Stop receiving offers for {}, {}", runSpec.id, runSpec.version)
+          logger.info(s"Backing off due to task failures. Stop receiving offers for ${runSpec.id}, ${runSpec.version}")
         } else {
-          log.info("No tasks left to launch. Stop receiving offers for {}, {}", runSpec.id, runSpec.version)
+          logger.info(s"No tasks left to launch. Stop receiving offers for ${runSpec.id}, ${runSpec.version}")
         }
         offerMatcherManager.removeSubscription(myselfAsOfferMatcher)(context.dispatcher)
         registeredAsMatcher = false
@@ -490,7 +478,7 @@ private class TaskLauncherActor(
 
     def unregister(): Unit = {
       if (registeredAsMatcher) {
-        log.info("Deregister as matcher.")
+        logger.info("Deregister as matcher.")
         offerMatcherManager.removeSubscription(myselfAsOfferMatcher)(context.dispatcher)
         registeredAsMatcher = false
       }

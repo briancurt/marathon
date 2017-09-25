@@ -18,30 +18,35 @@ apt-key adv --keyserver hkp://p80.pool.sks-keyservers.net:80 --recv-keys 58118E8
 
 # Add Mesos repo.
 apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv E56151BF && \
-echo "deb http://repos.mesosphere.com/debian jessie-unstable main" | tee -a /etc/apt/sources.list.d/mesosphere.list && \
-echo "deb http://repos.mesosphere.com/debian jessie-testing main" | tee -a /etc/apt/sources.list.d/mesosphere.list && \
-echo "deb http://repos.mesosphere.com/debian jessie main" | tee -a /etc/apt/sources.list.d/mesosphere.list && \
+  echo "deb http://repos.mesosphere.com/debian jessie-unstable main" | tee -a /etc/apt/sources.list.d/mesosphere.list && \
+  echo "deb http://repos.mesosphere.com/debian jessie-testing main" | tee -a /etc/apt/sources.list.d/mesosphere.list && \
+  echo "deb http://repos.mesosphere.com/debian jessie main" | tee -a /etc/apt/sources.list.d/mesosphere.list && \
 
-apt-get -y update
+  apt-get -y update
+
+# Add github.com to known hosts
+ssh-keyscan github.com >> /home/admin/.ssh/known_hosts
+ssh-keyscan github.com >> /root/.ssh/known_hosts
 
 # Install dependencies
 apt install -t jessie-backports -y openjdk-8-jdk
 update-java-alternatives -s java-1.8.0-openjdk-amd64
 
 apt-get install -y \
-    git \
-    php5-cli \
-    php5-curl \
-    sbt \
-    docker-engine \
-    curl \
-    build-essential \
-    rpm \
-    npm
+        git \
+        php5-cli \
+        php5-curl \
+        sbt \
+        docker-engine \
+        curl \
+        build-essential \
+        rpm \
+        npm
 
 # Download (but don't install) Mesos and its dependencies.
 # The CI task will install Mesos later.
 apt-get install -y --force-yes --no-install-recommends mesos=$MESOS_VERSION
+systemctl stop mesos-master.service mesos-slave.service mesos_executor.slice
 
 # Add arcanist
 mkdir -p /opt/arcanist

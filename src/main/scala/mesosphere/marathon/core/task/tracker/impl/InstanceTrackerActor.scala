@@ -5,6 +5,7 @@ import akka.Done
 import akka.actor.SupervisorStrategy.Escalate
 import akka.actor._
 import akka.event.LoggingReceive
+import com.typesafe.scalalogging.StrictLogging
 import mesosphere.marathon.core.appinfo.TaskCounts
 import mesosphere.marathon.core.instance.Instance
 import mesosphere.marathon.core.instance.update.{ InstanceChange, InstanceDeleted, InstanceUpdateEffect, InstanceUpdateOperation, InstanceUpdated }
@@ -12,7 +13,6 @@ import mesosphere.marathon.core.task.tracker.impl.InstanceTrackerActor.ForwardTa
 import mesosphere.marathon.core.task.tracker.{ InstanceTracker, InstanceTrackerUpdateStepProcessor }
 import mesosphere.marathon.metrics.AtomicGauge
 import mesosphere.marathon.state.{ PathId, Timestamp }
-import org.slf4j.LoggerFactory
 
 import scala.concurrent.Future
 import scala.util.control.NonFatal
@@ -35,12 +35,13 @@ object InstanceTrackerActor {
   private[impl] case class ForwardTaskOp(deadline: Timestamp, instanceId: Instance.Id, op: InstanceUpdateOperation)
 
   /** Describes where and what to send after an update event has been processed by the [[InstanceTrackerActor]]. */
-  private[impl] case class Ack(initiator: ActorRef, effect: InstanceUpdateEffect) {
+  private[impl] case class Ack(initiator: ActorRef, effect: InstanceUpdateEffect) extends StrictLogging {
     def sendAck(): Unit = {
       val msg = effect match {
         case InstanceUpdateEffect.Failure(cause) => Status.Failure(cause)
         case _ => effect
       }
+      logger.debug(s"Send acknowledgement: initiator=$initiator msg=$msg")
       initiator ! msg
     }
   }
@@ -70,9 +71,8 @@ private[impl] class InstanceTrackerActor(
     metrics: InstanceTrackerActor.ActorMetrics,
     taskLoader: InstancesLoader,
     updateStepProcessor: InstanceTrackerUpdateStepProcessor,
-    taskUpdaterProps: ActorRef => Props) extends Actor with Stash {
+    taskUpdaterProps: ActorRef => Props) extends Actor with Stash with StrictLogging {
 
-  private[this] val log = LoggerFactory.getLogger(getClass)
   private[this] val updaterRef = context.actorOf(taskUpdaterProps(self), "updater")
 
   override val supervisorStrategy = OneForOneStrategy() { case _: Exception => Escalate }
@@ -80,7 +80,7 @@ private[impl] class InstanceTrackerActor(
   override def preStart(): Unit = {
     super.preStart()
 
-    log.info(s"${getClass.getSimpleName} is starting. Task loading initiated.")
+    logger.info(s"${getClass.getSimpleName} is starting. Task loading initiated.")
     metrics.resetMetrics()
 
     import akka.pattern.pipe
@@ -98,7 +98,7 @@ private[impl] class InstanceTrackerActor(
 
   private[this] def initializing: Receive = LoggingReceive.withLabel("initializing") {
     case appTasks: InstanceTracker.InstancesBySpec =>
-      log.info("Task loading complete.")
+      logger.info("Task loading complete.")
 
       unstashAll()
       context.become(withTasks(
@@ -154,6 +154,7 @@ private[impl] class InstanceTrackerActor(
             Some(InstanceUpdated(instance, lastState = oldState.map(_.state), events))
 
           case InstanceUpdateEffect.Expunge(instance, events) =>
+            logger.debug(s"Received expunge for ${instance.instanceId}")
             becomeWithUpdatedApp(instance.runSpecId)(instance.instanceId, newInstance = None)
             Some(InstanceDeleted(instance, lastState = None, events))
 
@@ -169,7 +170,7 @@ private[impl] class InstanceTrackerActor(
           updateStepProcessor.process(change).recover {
             case NonFatal(cause) =>
               // since we currently only use ContinueOnErrorSteps, we can simply ignore failures here
-              log.warn("updateStepProcessor.process failed: {}", cause)
+              logger.warn("updateStepProcessor.process failed", cause)
               Done
           }
         }.getOrElse(Future.successful(Done)).foreach { _ =>

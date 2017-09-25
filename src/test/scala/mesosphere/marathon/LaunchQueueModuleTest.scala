@@ -1,8 +1,8 @@
 package mesosphere.marathon
 
+import java.time.Clock
+
 import mesosphere.AkkaUnitTest
-import mesosphere.marathon.core.async.ExecutionContexts
-import mesosphere.marathon.core.base.Clock
 import mesosphere.marathon.core.instance.TestInstanceBuilder
 import mesosphere.marathon.core.instance.TestInstanceBuilder._
 import mesosphere.marathon.core.instance.update.{ InstanceUpdateEffect, InstanceUpdateOperation }
@@ -13,14 +13,13 @@ import mesosphere.marathon.core.leadership.AlwaysElectedLeadershipModule
 import mesosphere.marathon.core.matcher.DummyOfferMatcherManager
 import mesosphere.marathon.core.matcher.base.util.OfferMatcherSpec
 import mesosphere.marathon.core.task.Task
-import mesosphere.marathon.core.task.bus.{ TaskBusModule, TaskStatusUpdateTestHelper }
+import mesosphere.marathon.core.task.bus.TaskStatusUpdateTestHelper
 import mesosphere.marathon.core.task.tracker.InstanceTracker
 import mesosphere.marathon.integration.setup.WaitTestSupport
 import mesosphere.marathon.state.PathId
 import mesosphere.marathon.test.MarathonTestHelper
 import org.mockito.Matchers
 
-import scala.concurrent.Future
 import scala.concurrent.duration._
 
 class LaunchQueueModuleTest extends AkkaUnitTest with OfferMatcherSpec {
@@ -88,7 +87,7 @@ class LaunchQueueModuleTest extends AkkaUnitTest with OfferMatcherSpec {
       Given("a launch queue with one item which is purged")
       instanceTracker.instancesBySpecSync returns InstanceTracker.InstancesBySpec.empty
       launchQueue.add(app)
-      launchQueue.purge(app.id)
+      launchQueue.asyncPurge(app.id).futureValue
 
       When("querying its count")
       val count = launchQueue.count(app.id)
@@ -106,7 +105,7 @@ class LaunchQueueModuleTest extends AkkaUnitTest with OfferMatcherSpec {
       Given("a launch queue with one item which is purged")
       instanceTracker.instancesBySpecSync returns InstanceTracker.InstancesBySpec.empty
       launchQueue.add(app)
-      launchQueue.purge(app.id)
+      launchQueue.asyncPurge(app.id).futureValue
       launchQueue.add(app)
 
       When("querying its count")
@@ -145,7 +144,7 @@ class LaunchQueueModuleTest extends AkkaUnitTest with OfferMatcherSpec {
       launchQueue.add(app)
 
       When("The app is purged")
-      launchQueue.purge(app.id)
+      launchQueue.asyncPurge(app.id).futureValue
 
       Then("No offer matchers remain registered")
       offerMatcherManager.offerMatchers should be(empty)
@@ -168,7 +167,7 @@ class LaunchQueueModuleTest extends AkkaUnitTest with OfferMatcherSpec {
       When("we ask for matching an offer")
       instanceOpFactory.matchOfferRequest(Matchers.any()) returns noMatchResult
       val now = clock.now()
-      val matchFuture = offerMatcherManager.offerMatchers.head.matchOffer(now, now + 3.seconds, offer)
+      val matchFuture = offerMatcherManager.offerMatchers.head.matchOffer(offer)
       val matchedTasks = matchFuture.futureValue
 
       Then("the offer gets passed to the task factory and respects the answer")
@@ -195,7 +194,7 @@ class LaunchQueueModuleTest extends AkkaUnitTest with OfferMatcherSpec {
       When("we ask for matching an offer")
       instanceOpFactory.matchOfferRequest(Matchers.any()) returns launchResult
       val now = clock.now()
-      val matchFuture = offerMatcherManager.offerMatchers.head.matchOffer(now, now + 3.seconds, offer)
+      val matchFuture = offerMatcherManager.offerMatchers.head.matchOffer(offer)
       val matchedTasks = matchFuture.futureValue
 
       Then("the offer gets passed to the task factory and respects the answer")
@@ -223,13 +222,11 @@ class LaunchQueueModuleTest extends AkkaUnitTest with OfferMatcherSpec {
       And("a task gets launched but not confirmed")
       instanceOpFactory.matchOfferRequest(Matchers.any()) returns launchResult
       val now = clock.now()
-      val matchFuture = offerMatcherManager.offerMatchers.head.matchOffer(now, now + 3.seconds, offer)
+      val matchFuture = offerMatcherManager.offerMatchers.head.matchOffer(offer)
       matchFuture.futureValue
 
       And("test app gets purged (but not stopped yet because of in-flight tasks)")
-      Future {
-        launchQueue.purge(app.id)
-      }(ExecutionContexts.global)
+      launchQueue.asyncPurge(app.id)
       WaitTestSupport.waitUntil("purge gets executed", 1.second) {
         !launchQueue.list.exists(_.runSpec.id == app.id)
       }
@@ -258,11 +255,10 @@ class LaunchQueueModuleTest extends AkkaUnitTest with OfferMatcherSpec {
       operation = InstanceUpdateOperation.LaunchEphemeral(instance),
       effect = InstanceUpdateEffect.Update(instance = instance, oldState = None, events = Nil)).wrapped
 
-    lazy val clock: Clock = Clock()
+    lazy val clock: Clock = Clock.systemUTC()
     val noMatchResult = OfferMatchResult.NoMatch(app, offer, Seq.empty, clock.now())
     val launchResult = OfferMatchResult.Match(app, offer, launch, clock.now())
 
-    lazy val taskBusModule: TaskBusModule = new TaskBusModule()
     lazy val offerMatcherManager: DummyOfferMatcherManager = new DummyOfferMatcherManager()
     lazy val instanceTracker: InstanceTracker = mock[InstanceTracker]
     lazy val instanceOpFactory: InstanceOpFactory = mock[InstanceOpFactory]

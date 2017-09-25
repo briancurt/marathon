@@ -1,5 +1,7 @@
 ## Changes from 1.4.x to 1.5.0 (unreleased)
 
+### Recommended Mesos version is 1.3.0
+
 ### Breaking Changes
 
 #### Packaging standardized
@@ -70,7 +72,13 @@ Please find our [API documentation](https://mesosphere.github.io/marathon/api-co
 The events subscribers endpoint (`/v2/eventSubscribers`) was deprecated in Marathon 1.4 and is removed in this version.
 Please move to the `/v2/events` endpoint instead.
 
-### New Features
+#### Removed command line parameters
+- The command line flag `max_tasks_per_offer` has been deprecated since 1.4 and is removed now. Please use `max_instances_per_offer`.
+
+#### Deprecated command line parameters
+- The command line flag `save_tasks_to_launch_timeout` is deprecated and has no effect any longer.
+
+### Overview
 
 #### Networking Improvements Involving Multiple Container Networks
 
@@ -102,7 +110,48 @@ All validation specified in the RAML is now programatically enforced, leading to
 
 Marathon is in better compliance with various security best-practices. An example of this is that Marathon no longer responds to the directory listing request.
 
-------------------------------------------------------------
+#### File-based secrets
+
+Marathon has a pluggable interface for secret store providers.
+Previous versions of Marathon allowed secrets to be passed as environment variables.
+With this version it is also possible to provide secrets as volumes, mounted under a specified path.
+See [file based secret documentation](http://mesosphere.github.io/marathon/docs/secrets.html)
+
+#### Changes around unreachableStrategy
+
+Recent changes in Apache Mesos introduced the ability to handle intermittent connectivity to an agent which may be running a Marathon task. This change introduced the `TASK_UNREACHABLE`. This allows for the ability for a node to disconnect and reconnect to the cluster without having a task replaced. This resulted in (based on default configurations) of a delay of 75 seconds before Marathon would be notified by Mesos to replace the task. The previous behavior of Marathon was usually sub-second replacement of a lost task.
+
+It is now possible to configure `unreachableStrategy` for apps and pods to instantly replace unreachable apps or pods. To enable this behavior, you need to configure your app or pod as shown below:
+
+```
+{
+  ...
+  "unreachableStrategy": {
+    "inactiveAfterSeconds": 0,
+    "expungeAfterSeconds": 0
+  },
+  ...
+}
+```
+
+**Note**: Instantly means as soon as marathon becomes aware of the unreachable task. By default, Marathon is notified after 75 seconds by Mesos
+  that an agent is disconnected. You can change this duration in Mesos by configuring `agent_ping_timeout` and `max_agent_ping_timeouts`.
+
+#### Migrating unreachableStrategy
+
+If you want all of your apps and pods to adopt a `UnreachableStrategy` that retains the previous behavior where instance were immediately replaced so that you does not have to update every single app definition.
+
+To change the `unreachableStrategy` of all apps and pods, set the environment variable `MIGRATION_1_4_6_UNREACHABLE_STRATEGY` to `true`, which leads to the following behavior during migration:
+
+When opting in to the unreachable migration step
+1) all app and pod definitions that had a config of `UnreachableStrategy(300 seconds, 600 seconds)` (previous default) are migrated to have `UnreachableStrategy(0 seconds, 0 seconds)`
+2) all app and pod definitions that had a config of `UnreachableStrategy(1 second, x seconds)` are migrated to have `UnreachableStrategy(0 seconds, x seconds)`
+3) all app and pod definitions that had a config of `UnreachableStrategy(1 second, 2 seconds)` are migrated to have `UnreachableStrategy(0 seconds, 0 seconds)`
+
+**Note**: If you set this variable after upgrading to 1.4.6, it will have no effect. Also, the `UnreachableStrategy` default has not been changed, so in order for apps and pods created in the future to have the replace-instantly behavior, `unreachableStrategy`'s `inactiveAfterSeconds` and `expungeAfterSeconds` must be set to 0 as seen in the JSON above.
+
+### Fixed issues
+- [MARATHON-7320](https://jira.mesosphere.com/browse/MARATHON-7320) Fix MAX_PER constraint for attributes.
 
 ## Changes from 1.4.1 to 1.4.2
 Bugfix release
@@ -146,6 +195,8 @@ Bugfix release
 - [Data migration for UnreachableDisabled](https://github.com/mesosphere/marathon/issues/5209)
 
 ## Changes from 1.3.10 to 1.4.0
+
+### Recommended Mesos version is 1.1.0
 
 ### Breaking Changes
 

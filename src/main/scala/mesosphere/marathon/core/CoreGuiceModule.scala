@@ -1,6 +1,7 @@
 package mesosphere.marathon
 package core
 
+import java.time.Clock
 import javax.inject.Named
 
 import akka.actor.{ ActorRef, Props }
@@ -10,7 +11,6 @@ import com.google.inject.name.Names
 import com.typesafe.config.Config
 import mesosphere.marathon.core.appinfo.{ AppInfoModule, AppInfoService, GroupInfoService, PodStatusService }
 import mesosphere.marathon.core.async.ExecutionContexts
-import mesosphere.marathon.core.base.Clock
 import mesosphere.marathon.core.deployment.DeploymentManager
 import mesosphere.marathon.core.election.ElectionService
 import mesosphere.marathon.core.group.GroupManager
@@ -22,7 +22,6 @@ import mesosphere.marathon.core.leadership.{ LeadershipCoordinator, LeadershipMo
 import mesosphere.marathon.core.plugin.{ PluginDefinitions, PluginManager }
 import mesosphere.marathon.core.pod.PodManager
 import mesosphere.marathon.core.readiness.ReadinessCheckExecutor
-import mesosphere.marathon.core.task.bus.{ TaskChangeObservables, TaskStatusEmitter }
 import mesosphere.marathon.core.task.jobs.TaskJobsModule
 import mesosphere.marathon.core.task.termination.KillService
 import mesosphere.marathon.core.task.tracker.{ InstanceCreationHandler, InstanceTracker, TaskStateOpProcessor }
@@ -78,13 +77,6 @@ class CoreGuiceModule(config: Config) extends AbstractModule {
 
   @Provides @Singleton
   def offerProcessor(coreModule: CoreModule): OfferProcessor = coreModule.launcherModule.offerProcessor
-
-  @Provides @Singleton
-  def taskStatusEmitter(coreModule: CoreModule): TaskStatusEmitter = coreModule.taskBusModule.taskStatusEmitter
-
-  @Provides @Singleton
-  def taskStatusObservable(coreModule: CoreModule): TaskChangeObservables =
-    coreModule.taskBusModule.taskStatusObservables
 
   @Provides @Singleton
   def taskJobsModule(coreModule: CoreModule): TaskJobsModule = coreModule.taskJobsModule
@@ -146,7 +138,7 @@ class CoreGuiceModule(config: Config) extends AbstractModule {
     coreModule.storageModule.frameworkIdRepository
 
   @Provides @Singleton
-  def RuntimeConfigurationRepository(coreModule: CoreModule): RuntimeConfigurationRepository =
+  def runtimeConfigurationRepository(coreModule: CoreModule): RuntimeConfigurationRepository =
     coreModule.storageModule.runtimeConfigurationRepository
 
   @Provides @Singleton
@@ -160,7 +152,6 @@ class CoreGuiceModule(config: Config) extends AbstractModule {
     notifyHealthCheckManagerStepImpl: NotifyHealthCheckManagerStepImpl,
     notifyRateLimiterStepImpl: NotifyRateLimiterStepImpl,
     notifyLaunchQueueStepImpl: NotifyLaunchQueueStepImpl,
-    taskStatusEmitterPublishImpl: TaskStatusEmitterPublishStepImpl,
     postToEventStreamStepImpl: PostToEventStreamStepImpl,
     scaleAppUpdateStepImpl: ScaleAppUpdateStepImpl): Seq[InstanceChangeHandler] = {
 
@@ -180,7 +171,6 @@ class CoreGuiceModule(config: Config) extends AbstractModule {
       ContinueOnErrorStep(notifyHealthCheckManagerStepImpl),
       ContinueOnErrorStep(notifyRateLimiterStepImpl),
       ContinueOnErrorStep(notifyLaunchQueueStepImpl),
-      ContinueOnErrorStep(taskStatusEmitterPublishImpl),
       ContinueOnErrorStep(postToEventStreamStepImpl),
       ContinueOnErrorStep(scaleAppUpdateStepImpl)
     )
@@ -192,7 +182,7 @@ class CoreGuiceModule(config: Config) extends AbstractModule {
   }
 
   override def configure(): Unit = {
-    bind(classOf[Clock]).toInstance(Clock())
+    bind(classOf[Clock]).toInstance(Clock.systemUTC())
     bind(classOf[CoreModule]).to(classOf[CoreModuleImpl]).in(Scopes.SINGLETON)
 
     // FIXME: Because of cycle breaking in guice, it is hard to not wire it with Guice directly
