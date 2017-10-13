@@ -52,15 +52,26 @@ class EventsController(
     authenticated.apply { implicit identity =>
       authorized(ViewResource, AuthorizedResource.Events).apply {
         parameters('event_type.*) { events =>
-          extractClientIP { clientIp =>
-            complete {
-              Source
-                .fromGraph[MarathonEvent, NotUsed](
-                  new EventStreamSourceGraph(eventBus, conf.eventStreamMaxOutstandingMessages(), clientIp)
-                )
-                .filter(isAllowed(events.toSet))
-                .map(event => ServerSentEvent(`type` = event.eventType, data = Json.stringify(Formats.eventToJson(event)(conf.eventStreamLightweight()))))
-                .keepAlive(5.second, () => ServerSentEvent.heartbeat)
+          parameter("plan-format".?) { light =>
+            extractClientIP { clientIp =>
+              complete {
+                // Extract the plan-format URL argument
+                val useLightWeightEvents = light match {
+                  case Some(value) => value.contentEquals("light")
+                  case None => false
+                }
+
+                // Create event source
+                Source
+                  .fromGraph[MarathonEvent, NotUsed](
+                    new EventStreamSourceGraph(eventBus, conf.eventStreamMaxOutstandingMessages(), clientIp)
+                  )
+                  .filter(isAllowed(events.toSet))
+                  .map(event => ServerSentEvent(`type` = event.eventType, data = Json.stringify(
+                    Formats.eventToJson(event, useLightWeightEvents)
+                  )))
+                  .keepAlive(5.second, () => ServerSentEvent.heartbeat)
+              }
             }
           }
         }
