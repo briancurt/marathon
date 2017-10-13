@@ -36,9 +36,9 @@ import scala.util.{ Failure, Success }
   */
 trait ElectionService {
   /**
-    * isLeader checks whether this instance is the leader
+    * isLeader checks whether this instance is the leader, and is initialized
     *
-    * @return true if this instance is the leader
+    * @return true if this instance is the leader, and is initialized
     */
   def isLeader: Boolean
 
@@ -129,6 +129,7 @@ class ElectionServiceImpl(
 
   import ElectionService._
   @volatile private[this] var lastState: LeadershipState = LeadershipState.Standby(None)
+  @volatile private[this] var _leaderAndReady: Boolean = false
   implicit private lazy val materializer = ActorMaterializer()
   var leaderSubscription: Option[Cancellable] = None
 
@@ -143,7 +144,7 @@ class ElectionServiceImpl(
   }
 
   override def isLeader: Boolean =
-    lastState == LeadershipState.ElectedAsLeader
+    _leaderAndReady
 
   override def localHostPort: String = hostPort
 
@@ -176,9 +177,13 @@ class ElectionServiceImpl(
     */
   private val localTransitionSink = Sink.foreach[LeadershipTransition] { e =>
     eventStream.publish(e)
-    if (e == LeadershipTransition.Standby) {
-      logger.error("Lost leadership; crashing")
-      crashStrategy.crash()
+    e match {
+      case LeadershipTransition.ElectedAsLeader =>
+        _leaderAndReady = true
+      case LeadershipTransition.Standby =>
+        _leaderAndReady = false
+        logger.error("Lost leadership; crashing")
+        crashStrategy.crash()
     }
   }
 
